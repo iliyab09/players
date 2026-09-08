@@ -53,7 +53,7 @@ jobs:
 
       # fail on anything critical/high that has a fix
       - name: scan image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ matrix.service }}:${{ env.IMAGE_TAG }}
           severity: CRITICAL,HIGH
