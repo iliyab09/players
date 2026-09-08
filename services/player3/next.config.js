@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // standalone = tiny runtime image, just server.js + what it needs
+  // standalone = tiny runtime image, only server.js and what it needs
   output: 'standalone',
   poweredByHeader: false,
 };
