@@ -1,0 +1,113 @@
+# build, test, scan and push every service. PRs never touch AWS.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # OIDC -> AWS, no stored keys
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [player1, player2, player3, player4, frontend]
+    env:
+      CTX: services/${{ matrix.service }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.CTX }}/package-lock.json
+
+      - name: unit tests
+        working-directory: ${{ env.CTX }}
+        run: npm ci && npm test
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CTX }}
+          load: true
+          tags: ${{ matrix.service }}:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # fail on anything critical/high that has a fix
+      - name: scan image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ matrix.service }}:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # --- push only from main ---
+      - name: aws login (oidc)
+        if: github.event_name != 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: ecr login
+        if: github.event_name != 'pull_request'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: push
+        if: github.event_name != 'pull_request'
+        run: |
+          IMG="${{ steps.ecr.outputs.registry }}/players/${{ matrix.service }}:${{ env.IMAGE_TAG }}"
+          docker tag "${{ matrix.service }}:${{ env.IMAGE_TAG }}" "$IMG"
+          docker push "$IMG"
+          echo "pushed $IMG" >> "$GITHUB_STEP_SUMMARY"
+
+  # tell argo: bump the dev image tags in the devops repo
+  bump-dev:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.DEVOPS_REPO_TOKEN }}
+    steps:
+      - name: skip if no token
+        if: env.TOKEN == ''
+        run: echo "::notice::DEVOPS_REPO_TOKEN not set, images pushed but dev tags not bumped"
+
+      - uses: actions/checkout@v4
+        if: env.TOKEN != ''
+        with:
+          repository: ${{ github.repository_owner }}/devops
+          token: ${{ env.TOKEN }}
+
+      - name: bump tags
+        if: env.TOKEN != ''
+        run: |
+          for s in player1 player2 player3 player4 frontend; do
+            yq -i '.image.tag = "${{ github.sha }}"' "argocd/values/dev/$s.yaml"
+          done
+          git config user.name "players-ci"
+          git config user.email "players-ci@users.noreply.github.com"
+          git add argocd/values/dev
+          git diff --cached --quiet && echo "nothing changed" && exit 0
+          git commit -m "dev: players @ ${GITHUB_SHA::7}"
+          git push
