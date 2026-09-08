@@ -97,7 +97,7 @@ jobs:
           TOKEN: ${{ secrets.DEVOPS_REPO_TOKEN }}
         working-directory: devops
         run: |
-          yq -i '.image.tag = "${{ steps.v.outputs.tag }}"' argocd/values/dev/${{ matrix.service }}.yaml
+          yq -i '.image.tag = "${{ steps.v.outputs.tag }}"' charts/${{ matrix.service }}/values-dev.yaml
           git config user.name ci
           git config user.email ci@users.noreply.github.com
           git commit -am "dev: ${{ matrix.service }} ${{ steps.v.outputs.tag }}"
