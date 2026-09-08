@@ -79,3 +79,26 @@ jobs:
           git config user.email ci@users.noreply.github.com
           git commit -am "${{ matrix.service }} ${{ steps.v.outputs.tag }} [skip ci]"
           git pull --rebase && git push
+
+      # tell argo: write the new tag into the devops repo
+      - name: checkout devops
+        if: env.TOKEN != ''
+        env:
+          TOKEN: ${{ secrets.DEVOPS_REPO_TOKEN }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/devops
+          token: ${{ secrets.DEVOPS_REPO_TOKEN }}
+          path: devops
+
+      - name: update dev tag
+        if: env.TOKEN != ''
+        env:
+          TOKEN: ${{ secrets.DEVOPS_REPO_TOKEN }}
+        working-directory: devops
+        run: |
+          yq -i '.image.tag = "${{ steps.v.outputs.tag }}"' argocd/values/dev/${{ matrix.service }}.yaml
+          git config user.name ci
+          git config user.email ci@users.noreply.github.com
+          git commit -am "dev: ${{ matrix.service }} ${{ steps.v.outputs.tag }}"
+          git pull --rebase && git push
